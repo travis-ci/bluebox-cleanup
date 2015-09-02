@@ -57,7 +57,10 @@ module Bluebox
     end
 
     def run_forever
-      loop { run_once }
+      loop do
+        run_once
+        sleep Integer(ENV['BLUEBOX_CLEANUP_LOOP_SLEEP'] || 60)
+      end
     end
 
     def run_once
