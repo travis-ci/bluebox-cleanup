@@ -52,6 +52,15 @@ module Bluebox
         return 1
       end
 
+      run_forever if ENV['BLUEBOX_CLEANUP_FOREVER']
+      run_once
+    end
+
+    def run_forever
+      loop { run_once }
+    end
+
+    def run_once
       n_killed = 0
 
       log(msg: 'fetching all bluebox servers', site: site)
