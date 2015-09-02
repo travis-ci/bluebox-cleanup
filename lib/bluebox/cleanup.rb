@@ -65,35 +65,49 @@ module Bluebox
 
     def run_once
       n_killed = 0
+      n_batch = 0
 
       log(msg: 'fetching all bluebox servers', site: site)
-      bluebox_client.servers.each do |server|
-        next unless server.hostname =~ /^testing-worker-linux/
+      bluebox_client.servers.each_slice(batch_size) do |servers|
+        log(msg: 'starting server batch', batch: n_batch)
+        job_id_map = {}
 
-        job_id = server.hostname.match(/-(\d+)\./)[1]
+        servers.each do |server|
+          next unless server.hostname =~ /^testing-worker-linux/
+          id = server.hostname.match(/-(\d+)\./)[1]
+          job_id_map[id] = server
+        end
+
+        next if job_id_map.empty?
+
         begin
-          job = JSON.parse(travis_client.get("/#{job_id}").body)
-          next if job.nil? || job.empty?
+          states = JSON.parse(travis_client.get("/multi/#{job_id_map.keys.join(',')}").body)
+          next if (states.nil? || states.empty? || states['data'].nil? || states['data'].empty?)
         rescue => e
-          log(msg: 'failed to fetch job', job_id: job_id, err: e, level: :error)
+          log(msg: 'failed to fetch job states', job_ids: job_id_map.keys, err: e, level: :error)
           next
         end
 
-        log(msg: 'handling job', job_id: job['id'], job_state: job['state'])
+        states['data'].each do |job|
+          log(msg: 'handling job', job_id: job['id'], job_state: job['state'])
 
-        if COMPLETED_STATES.include?(job['state'])
-          log(
-            msg: "job is #{job['state']}, killing block",
-            block_id: server.id,
-            job_id: job['id'],
-            job_state: job['state']
-          )
-          bluebox_client.request(
-            method: 'DELETE',
-            path: "/api/blocks/#{server.id}.js"
-          )
-          n_killed += 1
+          if COMPLETED_STATES.include?(job['state'])
+            block_id = job_id_map[job['id']].id
+            log(
+              msg: "job is #{job['state']}, killing block",
+              block_id: block_id,
+              job_id: job['id'],
+              job_state: job['state']
+            )
+            bluebox_client.request(
+              method: 'DELETE',
+              path: "/api/blocks/#{block_id}.js"
+            )
+            n_killed += 1
+          end
         end
+
+        n_batch += 1
       end
 
       log(msg: 'done', n_killed: n_killed, site: site)
@@ -101,6 +115,10 @@ module Bluebox
     end
 
     private
+
+    def batch_size
+      @batch_size ||= Integer(ENV['BLUEBOX_CLEANUP_BATCH_SIZE'] || 20)
+    end
 
     def travis_client
       @travis_client ||= build_travis_client
