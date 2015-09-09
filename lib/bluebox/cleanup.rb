@@ -82,7 +82,7 @@ module Bluebox
 
         begin
           states = JSON.parse(travis_client.get("/multi/#{job_id_map.keys.join(',')}").body)
-          next if (states.nil? || states.empty? || states['data'].nil? || states['data'].empty?)
+          next if states.nil? || states.empty? || states['data'].nil? || states['data'].empty?
         rescue => e
           log(msg: 'failed to fetch job states', job_ids: job_id_map.keys, err: e, level: :error)
           next
