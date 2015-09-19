@@ -55,10 +55,14 @@ module Bluebox
         return 1
       end
 
+      sleep_seconds = Integer(ENV['BLUEBOX_CLEANUP_LOOP_SLEEP'] || 60)
+
       loop do
         run_once
         break unless ENV['BLUEBOX_CLEANUP_FOREVER']
-        sleep Integer(ENV['BLUEBOX_CLEANUP_LOOP_SLEEP'] || 60)
+
+        log(msg: 'sleeping', seconds: sleep_seconds)
+        sleep sleep_seconds
       end
 
       0
