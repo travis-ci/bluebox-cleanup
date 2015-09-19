@@ -27,12 +27,12 @@ module Bluebox
     When we are refreshing workers on Blue Box, often the blocks are left stale
     as the controlling worker is destroyed without cleaning up the job runners.
 
-    You can delete these stale blocks by checking the job id of the block and comparing
-    that with the job status, then clicking on "Destroy" button, and confirming the popup
-    dialog box. This is cumbersome.
+    You can delete these stale blocks by checking the job id of the block and
+    comparing that with the job status, then clicking on "Destroy" button, and
+    confirming the popup dialog box. This is cumbersome.
 
-    This script gets the list of blocks running tests, and destroy them if our API
-    says the job it was running has finished.
+    This script gets the list of blocks running tests, and destroy them if our
+    API says the job it was running has finished.
     EOF
 
     attr_reader :argv
@@ -47,25 +47,27 @@ module Bluebox
         return 0
       end
 
-      unless [ENV.key?('BLUEBOX_ORG_API_KEY'), ENV.key?('BLUEBOX_COM_API_KEY')].any?
+      unless [
+        ENV.key?('BLUEBOX_ORG_API_KEY'),
+        ENV.key?('BLUEBOX_COM_API_KEY')
+      ].any?
         puts USAGE
         return 1
       end
 
-      run_forever if ENV['BLUEBOX_CLEANUP_FOREVER']
-      run_once
-    end
-
-    def run_forever
       loop do
         run_once
+        break unless ENV['BLUEBOX_CLEANUP_FOREVER']
         sleep Integer(ENV['BLUEBOX_CLEANUP_LOOP_SLEEP'] || 60)
       end
+
+      0
     end
 
     def run_once
       n_killed = 0
       n_batch = 0
+      n_errors = 0
 
       log(msg: 'fetching all bluebox servers', site: site)
       bluebox_client.servers.each_slice(batch_size) do |servers|
@@ -81,36 +83,59 @@ module Bluebox
         next if job_id_map.empty?
 
         begin
-          states = JSON.parse(travis_client.get("/multi/#{job_id_map.keys.join(',')}").body)
-          next if states.nil? || states.empty? || states['data'].nil? || states['data'].empty?
+          states = JSON.parse(
+            travis_client.get("/multi/#{job_id_map.keys.join(',')}").body
+          )
+          next if states.nil? || states.empty? ||
+                  states['data'].nil? || states['data'].empty?
         rescue => e
-          log(msg: 'failed to fetch job states', job_ids: job_id_map.keys, err: e, level: :error)
+          log(
+            msg: 'failed to fetch job states',
+            job_ids: job_id_map.keys,
+            err: "#{e}",
+            level: :error
+          )
           next
         end
 
         states['data'].each do |job|
+          next unless COMPLETED_STATES.include?(job['state'])
           log(msg: 'handling job', job_id: job['id'], job_state: job['state'])
 
-          if COMPLETED_STATES.include?(job['state'])
-            block_id = job_id_map[job['id']].id
-            log(
-              msg: "job is #{job['state']}, killing block",
-              block_id: block_id,
-              job_id: job['id'],
-              job_state: job['state']
-            )
-            bluebox_client.request(
-              method: 'DELETE',
-              path: "/api/blocks/#{block_id}.js"
-            )
+          block_id = job_id_map[job['id']].id
+          log(
+            msg: "job is #{job['state']}, killing block",
+            block_id: block_id,
+            job_id: job['id'],
+            job_state: job['state']
+          )
+
+          begin
+            bluebox_client.destroy_block(block_id)
             n_killed += 1
+          rescue => e
+            if e.respond_to?(:cause)
+              err_msg = JSON.parse(e.cause.response.body)['text']
+            else
+              err_msg = "#{e}"
+            end
+
+            log(
+              msg: 'failed to destroy block',
+              n_batch: n_batch,
+              block_id: block_id,
+              error: err_msg,
+              level: :error
+            )
+
+            n_errors += 1
           end
         end
 
         n_batch += 1
       end
 
-      log(msg: 'done', n_killed: n_killed, site: site)
+      log(msg: 'done', n_killed: n_killed, site: site, n_errors: n_errors)
       0
     end
 
