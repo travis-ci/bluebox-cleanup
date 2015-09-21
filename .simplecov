@@ -1,1 +1,1 @@
-SimpleCov.start if ENV['COVERAGE']
+SimpleCov.start { add_filter 'spec/' } if ENV['COVERAGE']
