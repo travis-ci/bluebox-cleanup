@@ -14,4 +14,4 @@ gem 'rspec', group: %i(development test)
 gem 'rubocop', group: %i(development test)
 gem 'simplecov', group: %i(development test)
 gem 'travis-config', '~> 0.1.0'
-gem 'travis-support', github: 'travis-ci/travis-support', ref: '4bb0e42'
+gem 'travis-support', github: 'travis-ci/travis-support'
