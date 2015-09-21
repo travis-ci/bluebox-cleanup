@@ -3,6 +3,6 @@
 lib = File.expand_path('../../lib', __FILE__)
 $LOAD_PATH << lib unless $LOAD_PATH.include?(lib)
 
-require 'bluebox/cleanup'
+require 'bluebox'
 
 exit(Bluebox::Cleanup.main(ARGV)) if $PROGRAM_NAME == __FILE__

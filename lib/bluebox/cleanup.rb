@@ -1,38 +1,38 @@
-require 'json'
 require 'fog'
 require 'hurley'
 
-require_relative 'stuff'
-require 'l2met_log'
+require_relative 'cleanup_runner'
 
 module Bluebox
   class Cleanup
-    include Stuff
-    include L2metLog
-
     def self.main(argv = ARGV)
       new(argv).run
     end
 
-    COMPLETED_STATES = %w(passed failed errored canceled).freeze
-
-    USAGE = <<-EOF.gsub(/^ {4}/, '')
-    Usage: #{File.basename($PROGRAM_NAME)} [account-alias]
-
-    Environment variables:
-
-      BLUEBOX_ORG_API_KEY - org account api key from https://boxpanel.bluebox.net/public/bp/api
-      BLUEBOX_COM_API_KEY - com account api key from https://boxpanel.bluebox.net/public/bp/api
-
-    When we are refreshing workers on Blue Box, often the blocks are left stale
-    as the controlling worker is destroyed without cleaning up the job runners.
-
-    You can delete these stale blocks by checking the job id of the block and
-    comparing that with the job status, then clicking on "Destroy" button, and
-    confirming the popup dialog box. This is cumbersome.
-
-    This script gets the list of blocks running tests, and destroy them if our
-    API says the job it was running has finished.
+    USAGE = <<-EOF.gsub(/^\s+> ?/, '')
+      > Usage: #{File.basename($PROGRAM_NAME)} [account-alias]
+      >
+      > Environment variables:
+      >              BLUEBOX_API_KEY - [REQUIRED] account api key
+      >      BLUEBOX_CLEANUP_FOREVER - run on repeat
+      >   BLUEBOX_CLEANUP_LOOP_SLEEP - sleep interval when running forever
+      >          BLUEBOX_CUSTOMER_ID - [REQUIRED] account customer id
+      >         TRAVIS_JOB_STATE_URL - [REQUIRED] URL to the job-state API
+      >
+      > The above key may be found at:
+      >   https://boxpanel.bluebox.net/public/bp/api
+      >
+      > When we are refreshing workers on Blue Box, often the blocks are
+      > left stale as the controlling worker is destroyed without cleaning
+      > up the job runners.
+      >
+      > You can delete these stale blocks by checking the job id of the
+      > block and comparing that with the job status, then clicking on
+      > "Destroy" button, and confirming the popup dialog box.
+      > This is cumbersome.
+      >
+      > This script gets the list of blocks running tests, and destroy
+      > them if our API says the job it was running has finished.
     EOF
 
     attr_reader :argv
@@ -47,99 +47,33 @@ module Bluebox
         return 0
       end
 
-      unless [
-        ENV.key?('BLUEBOX_ORG_API_KEY'),
-        ENV.key?('BLUEBOX_COM_API_KEY')
-      ].any?
+      %w(
+        BLUEBOX_API_KEY
+        BLUEBOX_CUSTOMER_ID
+        TRAVIS_JOB_STATE_URL
+      ).each do |key|
+        next if ENV.key?(key)
         puts USAGE
+        puts "ERROR: Missing #{key.inspect}"
         return 1
       end
 
       sleep_seconds = Integer(ENV['BLUEBOX_CLEANUP_LOOP_SLEEP'] || 60)
 
+      runner = Bluebox::CleanupRunner.new(
+        batch_size: batch_size,
+        travis_client: travis_client,
+        bluebox_client: bluebox_client
+      )
+
       loop do
-        run_once
+        runner.run
         break unless ENV['BLUEBOX_CLEANUP_FOREVER']
 
-        log(msg: 'sleeping', seconds: sleep_seconds)
+        log.info('sleeping', seconds: sleep_seconds)
         sleep sleep_seconds
       end
 
-      0
-    end
-
-    def run_once
-      n_killed = 0
-      n_batch = 0
-      n_errors = 0
-
-      log(msg: 'fetching all bluebox servers', site: site)
-      bluebox_client.servers.each_slice(batch_size) do |servers|
-        log(msg: 'starting server batch', batch: n_batch)
-        job_id_map = {}
-
-        servers.each do |server|
-          next unless server.hostname =~ /^testing-worker-linux/
-          id = server.hostname.match(/-(\d+)\./)[1]
-          job_id_map[id] = server
-        end
-
-        next if job_id_map.empty?
-
-        begin
-          states = JSON.parse(
-            travis_client.get("/multi/#{job_id_map.keys.join(',')}").body
-          )
-          next if states.nil? || states.empty? ||
-                  states['data'].nil? || states['data'].empty?
-        rescue => e
-          log(
-            msg: 'failed to fetch job states',
-            job_ids: job_id_map.keys,
-            err: "#{e}",
-            level: :error
-          )
-          next
-        end
-
-        states['data'].each do |job|
-          next unless COMPLETED_STATES.include?(job['state'])
-          log(msg: 'handling job', job_id: job['id'], job_state: job['state'])
-
-          block_id = job_id_map[job['id']].id
-          log(
-            msg: "job is #{job['state']}, killing block",
-            block_id: block_id,
-            job_id: job['id'],
-            job_state: job['state']
-          )
-
-          begin
-            bluebox_client.destroy_block(block_id)
-            n_killed += 1
-          rescue => e
-            if e.respond_to?(:cause)
-              err_msg = JSON.parse(e.cause.response.body)['text']
-            else
-              err_msg = "#{e}"
-            end
-
-            log(
-              msg: 'failed to destroy block',
-              n_batch: n_batch,
-              block_id: block_id,
-              error: err_msg,
-              level: :error
-            )
-
-            n_errors += 1
-          end
-        end
-
-        n_batch += 1
-      end
-
-      log(msg: 'done', n_killed: n_killed, site: site, n_errors: n_errors)
       0
     end
 
@@ -160,8 +94,23 @@ module Bluebox
     end
 
     def travis_job_state_url
-      return ENV.fetch('TRAVIS_JOB_STATE_URL') if site == 'org'
-      ENV.fetch('TRAVIS_PRO_JOB_STATE_URL')
+      ENV.fetch('TRAVIS_JOB_STATE_URL')
+    end
+
+    def bluebox_client
+      @bluebox_client ||= build_bluebox_client
+    end
+
+    def build_bluebox_client
+      Fog::Compute.new(
+        provider: 'Bluebox',
+        bluebox_customer_id: ENV['BLUEBOX_CUSTOMER_ID'],
+        bluebox_api_key: ENV['BLUEBOX_API_KEY']
+      )
+    end
+
+    def log
+      ::Bluebox.logger
     end
   end
 end
