@@ -1,1 +1,1 @@
-worker: bundle exec bin/bluebox-cleanup
+worker: bundle exec je bin/bluebox-cleanup
