@@ -13,7 +13,7 @@ describe Bluebox::Cleanup do
   after(:each) { $stdout = STDOUT }
 
   it 'has a log' do
-    expect(subject.send(:log)).to_not be_nil
+    expect(subject.send(:log)).to_not be nil
   end
 
   context 'when asked for help' do
